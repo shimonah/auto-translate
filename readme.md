@@ -8,5 +8,23 @@ Install Whisper
 
 Run
 
-python3 whisper_recorder.py --continuous --device default.monitor --language portuguese --session-name "my_meeting"
+python3 whisper_recorder.py --model=small --continuous --device default.monitor --chunk-size=30 --language russian --session-name "my_meeting"
+
+List of models
+
+tiny
+base
+small
+medium
+large
+
+Obervations
+- small is good with chunks 15 seconds 
+
+Command Russian
+python3 whisper_recorder.py --model=small --continuous --device default.monitor --chunk-size=15 --language russian --session-name "my_meeting"
+
+Command Portuguese
+
+python3 whisper_recorder.py --model=small --continuous --device default.monitor --chunk-size=15 --language portuguese --session-name "my_meeting"
 
