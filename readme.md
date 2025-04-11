@@ -24,8 +24,11 @@
 - turbo (only for transcription)
 
 ### Obervations
-- small model with 15 seconds chunks is good for tranlations
-- small chunks like 3 seconds takes same amount for translation and competely lose transcription quality
+
+FFMPEG takes 3-5 second to capture audio, hence little chunks does not work. For example saving audio chunk 2 seconds length takes 6-7 seconds for full processing.
+Chunks sizes starting from 20-30 seconds are better for tranlations to keep context sane.
+
+In next iteration better to read stream from audio directly and somehow feed it to the model to minimize latency.
 
 ### Usage
 
@@ -36,10 +39,10 @@
 
 Command Portuguese Translate Only
 
-```python3 whisper_recorder.py --model=small --continuous --device default.monitor --translate-only --chunk-size=15 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
+```python3 whisper_recorder.py --model=small --continuous --device default.monitor --translate-only --chunk-size=20 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
 
 Command Portuguese Transcribe Only
 
-```python3 whisper_recorder.py --model=small --continuous --device default.monitor --transcribe-only --chunk-size=15 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
+```python3 whisper_recorder.py --model=small --continuous --device default.monitor --transcribe-only --chunk-size=20 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
 
 
