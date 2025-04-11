@@ -4,12 +4,12 @@ import os
 import time
 import argparse
 import subprocess
-import whisper
 import datetime
 import signal
 import sys
 import threading
 import queue
+from faster_whisper import WhisperModel
 
 def get_timestamp():
     """Generate a timestamp for filenames"""
@@ -34,7 +34,7 @@ def record_audio(output_file, duration=None, device="default"):
     return process
 
 def process_audio(audio_file, model, master_original_file, master_translation_file, language=None, chunk_num=None, keep_audio=False):
-    """Process audio with Whisper for transcription and translation"""
+    """Process audio with Faster-Whisper for transcription and translation"""
     print(f"Processing {audio_file}...")
     
     try:
@@ -43,8 +43,12 @@ def process_audio(audio_file, model, master_original_file, master_translation_fi
         if language:
             transcribe_options["language"] = language
         
-        result = model.transcribe(audio_file, **transcribe_options)
-        original_text = result["text"].strip()
+        # Transcribe with faster-whisper
+        segments, info = model.transcribe(audio_file, **transcribe_options)
+        original_text = ""
+        for segment in segments:
+            original_text += segment.text
+        original_text = original_text.strip()
         
         print(f"Original text: {original_text[:100]}...")
         
@@ -59,8 +63,11 @@ def process_audio(audio_file, model, master_original_file, master_translation_fi
         print(f"Appended original text to {master_original_file}")
         
         # Translate to English
-        result = model.transcribe(audio_file, task="translate")
-        translation_text = result["text"].strip()
+        segments, info = model.transcribe(audio_file, task="translate")
+        translation_text = ""
+        for segment in segments:
+            translation_text += segment.text
+        translation_text = translation_text.strip()
         
         print(f"English text: {translation_text[:100]}...")
         
@@ -115,6 +122,9 @@ def main():
     parser.add_argument("--session-name", type=str, help="Name for the recording session (used in master file names)")
     parser.add_argument("--keep-audio", action="store_true", help="Keep temporary audio files (default is to delete them)")
     parser.add_argument("--num-workers", type=int, default=1, help="Number of transcription worker threads")
+    parser.add_argument("--device-type", type=str, default="cpu", help="Device to use for inference: 'cpu' or 'cuda'")
+    parser.add_argument("--compute-type", type=str, default="float32", 
+                        help="Compute type for inference: 'float32', 'float16', or 'int8'")
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
@@ -140,9 +150,9 @@ def main():
     
     print(f"Created master files:\n- {master_original_file}\n- {master_translation_file}")
     
-    # Load Whisper model
-    print(f"Loading Whisper model: {args.model}")
-    model = whisper.load_model(args.model)
+    # Load Faster-Whisper model
+    print(f"Loading Faster-Whisper model: {args.model} on {args.device_type} with compute type {args.compute_type}")
+    model = WhisperModel(args.model, device=args.device_type, compute_type=args.compute_type)
     
     # Create a queue for audio files to be processed
     audio_queue = queue.Queue()
