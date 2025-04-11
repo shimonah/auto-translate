@@ -24,7 +24,8 @@
 - turbo (only for transcription)
 
 ### Obervations
-- small is good with chunks 15 seconds 
+- small model with 15 seconds chunks is good for tranlations
+- small chunks like 3 seconds takes same amount for translation and competely lose transcription quality
 
 ### Usage
 
