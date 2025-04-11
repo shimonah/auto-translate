@@ -8,23 +8,12 @@ import whisper
 import datetime
 import signal
 import sys
-import wave
+import threading
+import queue
 
 def get_timestamp():
     """Generate a timestamp for filenames"""
     return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-def check_audio_file(audio_file):
-    """Check if the audio file is valid and contains data"""
-    try:
-        with wave.open(audio_file, 'rb') as wf:
-            frames = wf.getnframes()
-            duration = frames / wf.getframerate()
-            print(f"Audio file info: {frames} frames, {duration:.2f} seconds, {wf.getnchannels()} channels")
-            return frames > 0 and duration > 0.5  # At least half a second of audio
-    except Exception as e:
-        print(f"Error checking audio file: {e}")
-        return False
 
 def record_audio(output_file, duration=None, device="default"):
     """Record audio using ffmpeg"""
@@ -44,17 +33,9 @@ def record_audio(output_file, duration=None, device="default"):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process
 
-def process_audio(audio_file, model, master_original_file, master_translation_file, language=None, chunk_num=None):
+def process_audio(audio_file, model, master_original_file, master_translation_file, language=None, chunk_num=None, keep_audio=False):
     """Process audio with Whisper for transcription and translation"""
     print(f"Processing {audio_file}...")
-    
-    # Check if the audio file is valid
-    if not os.path.exists(audio_file):
-        print(f"Error: Audio file {audio_file} does not exist")
-        return False
-    
-    if not check_audio_file(audio_file):
-        print(f"Warning: Audio file {audio_file} may be empty or invalid")
     
     try:
         # Transcribe in original language (auto-detect or specified language)
@@ -92,17 +73,35 @@ def process_audio(audio_file, model, master_original_file, master_translation_fi
             f.write(translation_text)
         print(f"Appended translation to {master_translation_file}")
         
-        # Remove the temporary audio file
-        try:
-            os.remove(audio_file)
-            print(f"Removed temporary audio file: {audio_file}")
-        except Exception as e:
-            print(f"Warning: Could not remove audio file {audio_file}: {e}")
+        # Remove the temporary audio file if not keeping
+        if not keep_audio:
+            try:
+                os.remove(audio_file)
+                print(f"Removed temporary audio file: {audio_file}")
+            except Exception as e:
+                print(f"Warning: Could not remove audio file {audio_file}: {e}")
         
         return True
     except Exception as e:
         print(f"Error processing audio: {e}")
         return False
+
+def transcription_worker(audio_queue, model, master_original_file, master_translation_file, language, keep_audio):
+    """Worker thread to process audio files from the queue"""
+    while True:
+        try:
+            audio_file, chunk_num = audio_queue.get()
+            if audio_file is None:  # Sentinel value to stop the worker
+                break
+                
+            process_audio(
+                audio_file, model, master_original_file, master_translation_file,
+                language, chunk_num, keep_audio
+            )
+        except Exception as e:
+            print(f"Error in transcription worker: {e}")
+        finally:
+            audio_queue.task_done()
 
 def main():
     parser = argparse.ArgumentParser(description="Record audio, transcribe in original language, and translate to English")
@@ -115,6 +114,7 @@ def main():
     parser.add_argument("--device", type=str, default="default", help="PulseAudio device to record from (default for mic, default.monitor for system audio)")
     parser.add_argument("--session-name", type=str, help="Name for the recording session (used in master file names)")
     parser.add_argument("--keep-audio", action="store_true", help="Keep temporary audio files (default is to delete them)")
+    parser.add_argument("--num-workers", type=int, default=1, help="Number of transcription worker threads")
     args = parser.parse_args()
     
     # Create output directory if it doesn't exist
@@ -144,6 +144,20 @@ def main():
     print(f"Loading Whisper model: {args.model}")
     model = whisper.load_model(args.model)
     
+    # Create a queue for audio files to be processed
+    audio_queue = queue.Queue()
+    
+    # Start worker threads for transcription
+    workers = []
+    for i in range(args.num_workers):
+        worker = threading.Thread(
+            target=transcription_worker,
+            args=(audio_queue, model, master_original_file, master_translation_file, args.language, args.keep_audio),
+            daemon=True
+        )
+        worker.start()
+        workers.append(worker)
+    
     # Handle continuous recording mode
     if args.continuous:
         print(f"Starting continuous recording mode with {args.chunk_size} second chunks.")
@@ -157,33 +171,26 @@ def main():
                 
                 # Record audio chunk
                 process = record_audio(audio_file, args.chunk_size, args.device)
-                print(f"Waiting for chunk {chunk_num} recording to complete...")
+                print(f"Recording chunk {chunk_num}...")
                 process.wait()
                 
-                # Check for any errors in ffmpeg output
-                stdout, stderr = process.communicate()
-                if process.returncode != 0:
-                    print(f"Error recording audio chunk {chunk_num}:")
-                    print(stderr.decode())
-                    continue
-                
-                # Process the recorded chunk
-                success = process_audio(
-                    audio_file, model, master_original_file, master_translation_file, 
-                    args.language, chunk_num
-                )
-                
-                if success:
-                    print(f"Successfully processed chunk {chunk_num}")
-                else:
-                    print(f"Failed to process chunk {chunk_num}")
+                # Add the audio file to the processing queue
+                audio_queue.put((audio_file, chunk_num))
                 
                 # Add a small delay between chunks
-                time.sleep(1)
+                time.sleep(0.5)
                 chunk_num += 1
                 
         except KeyboardInterrupt:
             print("\nStopping continuous recording.")
+            
+            # Wait for all queued audio files to be processed
+            print("Waiting for remaining audio files to be processed...")
+            audio_queue.join()
+            
+            # Stop worker threads
+            for _ in workers:
+                audio_queue.put((None, None))  # Send sentinel to stop workers
             
             # Add end timestamp to master files
             end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -206,10 +213,8 @@ def main():
             print(f"Recording for {args.duration} seconds...")
             process.wait()
             # Process the audio
-            process_audio(
-                audio_file, model, master_original_file, master_translation_file,
-                args.language
-            )
+            audio_queue.put((audio_file, None))
+            audio_queue.join()  # Wait for processing to complete
         else:
             # For manual stopping with Ctrl+C
             print("Recording... Press Ctrl+C to stop and process the audio.")
@@ -220,10 +225,12 @@ def main():
                 process.terminate()
                 process.wait()
                 # Process the audio
-                process_audio(
-                    audio_file, model, master_original_file, master_translation_file,
-                    args.language
-                )
+                audio_queue.put((audio_file, None))
+                audio_queue.join()  # Wait for processing to complete
+        
+        # Stop worker threads
+        for _ in workers:
+            audio_queue.put((None, None))  # Send sentinel to stop workers
         
         # Add end timestamp to master files
         end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
