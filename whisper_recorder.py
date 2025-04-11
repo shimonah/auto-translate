@@ -33,52 +33,59 @@ def record_audio(output_file, duration=None, device="default"):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return process
 
-def process_audio(audio_file, model, master_original_file, master_translation_file, language=None, chunk_num=None, keep_audio=False):
+def process_audio(audio_file, model, master_original_file, master_translation_file, language=None, chunk_num=None, keep_audio=False, transcribe_only=False, translate_only=False):
     """Process audio with Faster-Whisper for transcription and translation"""
     print(f"Processing {audio_file}...")
     
     try:
-        # Transcribe in original language (auto-detect or specified language)
-        transcribe_options = {}
-        if language:
-            transcribe_options["language"] = language
-        
-        # Transcribe with faster-whisper
-        segments, info = model.transcribe(audio_file, **transcribe_options)
-        original_text = ""
-        for segment in segments:
-            original_text += segment.text
-        original_text = original_text.strip()
-        
-        print(f"Original text: {original_text[:100]}...")
-        
-        # Append to master original file
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(master_original_file, "a", encoding="utf-8") as f:
-            if chunk_num:
-                f.write(f"\n\n[Chunk {chunk_num} - {timestamp}]\n")
-            else:
-                f.write(f"\n\n[{timestamp}]\n")
-            f.write(original_text)
-        print(f"Appended original text to {master_original_file}")
         
-        # Translate to English
-        segments, info = model.transcribe(audio_file, task="translate")
-        translation_text = ""
-        for segment in segments:
-            translation_text += segment.text
-        translation_text = translation_text.strip()
+        # Determine which operations to perform
+        do_transcribe = not translate_only
+        do_translate = not transcribe_only
         
-        print(f"English text: {translation_text[:100]}...")
+        if do_transcribe:
+            # Transcribe in original language (auto-detect or specified language)
+            transcribe_options = {}
+            if language:
+                transcribe_options["language"] = language
+            
+            # Transcribe with faster-whisper
+            segments, info = model.transcribe(audio_file, **transcribe_options)
+            original_text = ""
+            for segment in segments:
+                original_text += segment.text
+            original_text = original_text.strip()
+            
+            print(f"Original text: {original_text[:100]}...")
+            
+            # Append to master original file
+            with open(master_original_file, "a", encoding="utf-8") as f:
+                if chunk_num:
+                    f.write(f"\n\n[Chunk {chunk_num} - {timestamp}]\n")
+                else:
+                    f.write(f"\n\n[{timestamp}]\n")
+                f.write(original_text)
+            print(f"Appended original text to {master_original_file}")
         
-        # Append to master translation file
-        with open(master_translation_file, "a", encoding="utf-8") as f:
-            if chunk_num:
-                f.write(f"\n\n[Chunk {chunk_num} - {timestamp}]\n")
-            else:
-                f.write(f"\n\n[{timestamp}]\n")
-            f.write(translation_text)
-        print(f"Appended translation to {master_translation_file}")
+        if do_translate:
+            # Translate to English
+            segments, info = model.transcribe(audio_file, task="translate")
+            translation_text = ""
+            for segment in segments:
+                translation_text += segment.text
+            translation_text = translation_text.strip()
+            
+            print(f"English text: {translation_text[:100]}...")
+            
+            # Append to master translation file
+            with open(master_translation_file, "a", encoding="utf-8") as f:
+                if chunk_num:
+                    f.write(f"\n\n[Chunk {chunk_num} - {timestamp}]\n")
+                else:
+                    f.write(f"\n\n[{timestamp}]\n")
+                f.write(translation_text)
+            print(f"Appended translation to {master_translation_file}")
         
         # Remove the temporary audio file if not keeping
         if not keep_audio:
@@ -93,7 +100,7 @@ def process_audio(audio_file, model, master_original_file, master_translation_fi
         print(f"Error processing audio: {e}")
         return False
 
-def transcription_worker(audio_queue, model, master_original_file, master_translation_file, language, keep_audio):
+def transcription_worker(audio_queue, model, master_original_file, master_translation_file, language, keep_audio, transcribe_only, translate_only):
     """Worker thread to process audio files from the queue"""
     while True:
         try:
@@ -103,7 +110,7 @@ def transcription_worker(audio_queue, model, master_original_file, master_transl
                 
             process_audio(
                 audio_file, model, master_original_file, master_translation_file,
-                language, chunk_num, keep_audio
+                language, chunk_num, keep_audio, transcribe_only, translate_only
             )
         except Exception as e:
             print(f"Error in transcription worker: {e}")
@@ -125,7 +132,14 @@ def main():
     parser.add_argument("--device-type", type=str, default="cpu", help="Device to use for inference: 'cpu' or 'cuda'")
     parser.add_argument("--compute-type", type=str, default="float32", 
                         help="Compute type for inference: 'float32', 'float16', or 'int8'")
+    parser.add_argument("--transcribe-only", action="store_true", help="Only transcribe in original language, don't translate")
+    parser.add_argument("--translate-only", action="store_true", help="Only translate to English, don't transcribe in original language")
     args = parser.parse_args()
+    
+    # Validate mutually exclusive options
+    if args.transcribe_only and args.translate_only:
+        print("Error: --transcribe-only and --translate-only cannot be used together")
+        sys.exit(1)
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
@@ -138,17 +152,23 @@ def main():
     master_translation_file = os.path.join(args.output_dir, f"{session_name}_master_english.txt")
     
     # Add headers to master files
-    with open(master_original_file, "w", encoding="utf-8") as f:
-        f.write(f"# Master Original Transcription - {session_name}\n")
-        f.write(f"# Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        if args.language:
-            f.write(f"# Language: {args.language}\n")
+    if not args.translate_only:
+        with open(master_original_file, "w", encoding="utf-8") as f:
+            f.write(f"# Master Original Transcription - {session_name}\n")
+            f.write(f"# Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if args.language:
+                f.write(f"# Language: {args.language}\n")
     
-    with open(master_translation_file, "w", encoding="utf-8") as f:
-        f.write(f"# Master English Translation - {session_name}\n")
-        f.write(f"# Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    if not args.transcribe_only:
+        with open(master_translation_file, "w", encoding="utf-8") as f:
+            f.write(f"# Master English Translation - {session_name}\n")
+            f.write(f"# Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    print(f"Created master files:\n- {master_original_file}\n- {master_translation_file}")
+    print(f"Created master files:")
+    if not args.translate_only:
+        print(f"- {master_original_file}")
+    if not args.transcribe_only:
+        print(f"- {master_translation_file}")
     
     # Load Faster-Whisper model
     print(f"Loading Faster-Whisper model: {args.model} on {args.device_type} with compute type {args.compute_type}")
@@ -162,7 +182,8 @@ def main():
     for i in range(args.num_workers):
         worker = threading.Thread(
             target=transcription_worker,
-            args=(audio_queue, model, master_original_file, master_translation_file, args.language, args.keep_audio),
+            args=(audio_queue, model, master_original_file, master_translation_file, 
+                  args.language, args.keep_audio, args.transcribe_only, args.translate_only),
             daemon=True
         )
         worker.start()
@@ -204,10 +225,12 @@ def main():
             
             # Add end timestamp to master files
             end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            with open(master_original_file, "a", encoding="utf-8") as f:
-                f.write(f"\n\n# Ended: {end_time}\n")
-            with open(master_translation_file, "a", encoding="utf-8") as f:
-                f.write(f"\n\n# Ended: {end_time}\n")
+            if not args.translate_only:
+                with open(master_original_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n\n# Ended: {end_time}\n")
+            if not args.transcribe_only:
+                with open(master_translation_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n\n# Ended: {end_time}\n")
             
             print(f"Recording session ended. Master files updated.")
     else:
@@ -244,10 +267,12 @@ def main():
         
         # Add end timestamp to master files
         end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(master_original_file, "a", encoding="utf-8") as f:
-            f.write(f"\n\n# Ended: {end_time}\n")
-        with open(master_translation_file, "a", encoding="utf-8") as f:
-            f.write(f"\n\n# Ended: {end_time}\n")
+        if not args.translate_only:
+            with open(master_original_file, "a", encoding="utf-8") as f:
+                f.write(f"\n\n# Ended: {end_time}\n")
+        if not args.transcribe_only:
+            with open(master_translation_file, "a", encoding="utf-8") as f:
+                f.write(f"\n\n# Ended: {end_time}\n")
         
         print(f"Recording session ended. Master files updated.")
 

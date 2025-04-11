@@ -21,6 +21,7 @@
 - small
 - medium
 - large
+- turbo (only for transcription)
 
 ### Obervations
 - small is good with chunks 15 seconds 
@@ -32,7 +33,12 @@
 
 ### Commands
 
-Command Portuguese
+Command Portuguese Translate Only
 
-```python3 whisper_recorder.py --model=small --continuous --device default.monitor --chunk-size=15 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
+```python3 whisper_recorder.py --model=small --continuous --device default.monitor --translate-only --chunk-size=15 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
+
+Command Portuguese Transcribe Only
+
+```python3 whisper_recorder.py --model=small --continuous --device default.monitor --transcribe-only --chunk-size=15 --language pt --session-name "my_meeting" --device-type cpu --compute-type int8```
+
 
