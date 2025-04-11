@@ -28,3 +28,7 @@ Command Portuguese
 
 python3 whisper_recorder.py --model=small --continuous --device default.monitor --chunk-size=15 --language portuguese --session-name "my_meeting"
 
+for UI
+
+pip3 install sounddevice PyQt5 numpy torch openai-whisper
+sudo apt-get install libportaudio2 python3-pyaudio
